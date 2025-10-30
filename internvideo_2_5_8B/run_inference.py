@@ -25,7 +25,7 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-from inference_internvideo_2_5_8B import InternVideo2Inference
+from inference import InternVideo2Inference
 
 
 def parse_args():

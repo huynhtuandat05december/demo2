@@ -1,10 +1,15 @@
-# Demo2 - InternVideo2.5 Chat 8B Inference
+# Demo2 - Video Understanding Models Inference
 
-Video analysis and Q&A using OpenGVLab's InternVideo2.5 Chat 8B model for video understanding tasks on the RoadBuddy traffic dataset.
+Video analysis and Q&A using OpenGVLab's vision-language models for video understanding tasks on the RoadBuddy traffic dataset.
+
+Supported models:
+- **InternVideo2.5 Chat 8B** - Video-specific multimodal model
+- **InternVL3-8B** - General vision-language model with video support
+- **InternVL3-8B-Instruct** - Instruction-tuned variant
 
 ## Overview
 
-This project provides inference capabilities for video analysis using the InternVideo2.5 Chat 8B model. It supports:
+This project provides inference capabilities for video analysis using multiple vision-language models. It supports:
 - **Traffic video question answering** for dashcam footage
 - **Batch processing** of multiple videos with progress tracking
 - **8-bit quantization** to fit in 24GB VRAM
@@ -12,6 +17,16 @@ This project provides inference capabilities for video analysis using the Intern
 - **CSV output** in competition submission format
 - Dynamic frame sampling based on video duration
 - Adaptive image preprocessing for optimal performance
+
+### Model Comparison
+
+| Model | VRAM (8-bit) | VRAM (Full) | Speed | Best For |
+|-------|--------------|-------------|-------|----------|
+| InternVL3-8B | ~10-12GB | ~16-20GB | Fast | General vision tasks, less VRAM |
+| InternVL3-8B-Instruct | ~10-12GB | ~16-20GB | Fast | Instruction following |
+| InternVideo2.5 Chat 8B | ~24GB | ~40GB+ | Medium | Video-specific tasks |
+
+**Quick recommendation:** Use InternVL3-8B for lower VRAM usage and faster inference.
 
 ## Requirements
 
@@ -184,6 +199,106 @@ answer = inferencer.infer(
 print(f"Answer: {answer}")
 ```
 
+## InternVL3 Models
+
+### Quick Start: InternVL3-8B Inference
+
+Run inference on the RoadBuddy public test dataset using InternVL3-8B:
+
+```bash
+cd internvl3_8B
+python inference_traffic.py
+```
+
+### Command-Line Options
+
+```bash
+python inference_traffic.py [OPTIONS]
+
+Options:
+  --samples INT            Number of samples to process (default: all 405)
+  --model MODEL_NAME       Model to use for inference
+                          Choices: OpenGVLab/InternVL3-8B (default)
+                                   OpenGVLab/InternVL3-8B-Instruct
+  --num_frames INT         Number of frames to extract per video (default: 8)
+  --load_in_8bit          Enable 8-bit quantization (default: disabled)
+```
+
+### Examples
+
+**Test with 5 samples (quick test):**
+```bash
+python inference_traffic.py --samples 5
+```
+
+**Use instruction-tuned model:**
+```bash
+python inference_traffic.py --samples 5 --model OpenGVLab/InternVL3-8B-Instruct
+```
+
+**Full run with 8-bit quantization:**
+```bash
+python inference_traffic.py --load_in_8bit
+```
+
+**Full run with instruct model and 8-bit quantization:**
+```bash
+python inference_traffic.py --load_in_8bit --model OpenGVLab/InternVL3-8B-Instruct
+```
+
+**Custom frame count (more frames = better quality, slower):**
+```bash
+python inference_traffic.py --samples 10 --num_frames 16
+```
+
+**Debug single sample:**
+```bash
+python inference_traffic.py --samples 1 --load_in_8bit
+```
+
+### Output Format
+
+**Location:** `demo2/internvl3_8B/output/`
+
+**Filename:** `submission_InternVL3-8B_YYYYMMDD_HHMMSS.csv`
+
+Example: `submission_InternVL3-8B_20251030_143052.csv`
+
+**Content:**
+```csv
+id,answer
+testa_0001,B
+testa_0002,A
+testa_0003,D
+...
+```
+
+### InternVL3 Features
+
+**Frame Extraction:**
+- Extracts 8 uniform frames by default (configurable)
+- Uses dynamic preprocessing for optimal aspect ratio
+- Caches frames for videos with multiple questions
+- Thumbnail mode enabled for better context
+
+**Model Support:**
+- Base model: `OpenGVLab/InternVL3-8B`
+- Instruct model: `OpenGVLab/InternVL3-8B-Instruct`
+- Optional 8-bit quantization for reduced VRAM
+- Multi-GPU support with automatic layer splitting
+
+**Vietnamese Q&A:**
+- Custom prompt template for traffic questions
+- Handles 2-choice (Yes/No) and 4-choice questions
+- Robust answer extraction with regex patterns
+- Fallback to 'A' if parsing fails
+
+**Memory Requirements:**
+| Configuration | VRAM Required |
+|--------------|---------------|
+| Full precision | ~16-20GB |
+| 8-bit quantization | ~10-12GB |
+
 ## Configuration
 
 ### Memory Requirements
@@ -225,9 +340,11 @@ demo2/
 ├── pyproject.toml
 ├── main.py
 ├── output/                              # Generated CSV files
-└── internvideo_2_5_8B/
-    ├── inference_internvideo_2_5_8B.py  # Core inference class
-    └── run_inference.py                 # CLI entry point
+├── internvideo_2_5_8B/
+│   ├── inference_internvideo_2_5_8B.py  # Core inference class
+│   └── run_inference.py                 # CLI entry point
+└── internvl3_8B/
+    └── inference_traffic.py             # InternVL3-8B inference script
 ```
 
 ## Features
