@@ -59,11 +59,14 @@ class InternVideo2Inference:
                 trust_remote_code=True
             ).half().cuda().to(torch.bfloat16)
 
+        # Store device - works with both quantized and non-quantized models
+        self.device = next(iter(self.model.parameters())).device
+
         # Image preprocessing constants
         self.IMAGENET_MEAN = (0.485, 0.456, 0.406)
         self.IMAGENET_STD = (0.229, 0.224, 0.225)
 
-        print(f"Model loaded successfully on {self.model.device}")
+        print(f"Model loaded successfully on {self.device}")
 
     def build_transform(self, input_size: int = 448):
         """Build image transformation pipeline."""
@@ -324,7 +327,7 @@ Hãy chọn đáp án đúng nhất và chỉ trả lời bằng chữ cái A, B
                 get_frame_by_duration=False
             )
 
-            pixel_values = pixel_values.to(torch.bfloat16).to(self.model.device)
+            pixel_values = pixel_values.to(torch.bfloat16).to(self.device)
 
             # Build prompt
             video_prefix = "".join([f"Frame{i+1}: <image>\n" for i in range(len(num_patches_list))])
