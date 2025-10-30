@@ -13,4 +13,9 @@ dependencies = [
     "bitsandbytes",
     "tqdm",
     "pandas",
+    "torchvision",
+    "sentencepiece",
+    "timm",
+    "einops",
+    "accelerate",
 ]

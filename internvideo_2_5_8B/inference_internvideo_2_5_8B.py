@@ -12,7 +12,7 @@ from decord import VideoReader, cpu
 from PIL import Image
 from torchvision.transforms.functional import InterpolationMode
 from tqdm import tqdm
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer, BitsAndBytesConfig
 
 
 class InternVideo2Inference:
@@ -37,11 +37,21 @@ class InternVideo2Inference:
 
         # Load model with optional 8-bit quantization
         if load_in_8bit:
+            # Configure 8-bit quantization
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=True,
+                llm_int8_threshold=6.0
+            )
+
+            # Load model with proper 8-bit configuration
             self.model = AutoModel.from_pretrained(
                 model_path,
                 trust_remote_code=True,
-                load_in_8bit=True,
-                device_map="auto"
+                low_cpu_mem_usage=True,
+                _fast_init=False,
+                quantization_config=quantization_config,
+                device_map="auto",
+                torch_dtype=torch.float16
             )
         else:
             self.model = AutoModel.from_pretrained(
