@@ -10,7 +10,6 @@ dependencies = [
     "imageio",
     "decord",
     "opencv-python",
-    "flash-attn",
     "bitsandbytes",
     "tqdm",
     "pandas",
