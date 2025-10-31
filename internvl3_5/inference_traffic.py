@@ -269,8 +269,8 @@ def extract_answer(response, num_choices=4):
     print(f"Warning: Could not extract answer from: {response[:100]}... Using 'A' as fallback.")
     return 'A'
 
-def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking_mode=False):
-    """Run inference on all questions"""
+def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking_mode=False, batch_size=1):
+    """Run inference on all questions with optional batching"""
     results = []
     video_cache = {}  # Cache video frames
 
@@ -280,72 +280,188 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
     else:
         generation_config = dict(max_new_tokens=512, do_sample=False, temperature=0.0)
 
-    for idx, item in enumerate(tqdm(questions, desc="Processing questions")):
-        question_id = item['id']
-        question_text = item['question']
-        choices = item['choices']
-        video_path = item['video_path']
+    # Process questions in batches
+    total_batches = (len(questions) + batch_size - 1) // batch_size
 
-        # Construct full video path
-        full_video_path = os.path.join(base_path, video_path)
+    for batch_idx in tqdm(range(total_batches), desc="Processing batches"):
+        batch_start = batch_idx * batch_size
+        batch_end = min(batch_start + batch_size, len(questions))
+        batch_items = questions[batch_start:batch_end]
 
-        # Check if video has been processed before (caching)
-        if video_path not in video_cache:
+        # If batch size is 1, use single inference (faster for small batches)
+        if len(batch_items) == 1:
+            item = batch_items[0]
+            question_id = item['id']
+            question_text = item['question']
+            choices = item['choices']
+            video_path = item['video_path']
+
+            # Construct full video path
+            full_video_path = os.path.join(base_path, video_path)
+
+            # Check if video has been processed before (caching)
+            if video_path not in video_cache:
+                try:
+                    pixel_values, num_patches_list = load_video(
+                        full_video_path,
+                        num_segments=num_frames,
+                        max_num=1
+                    )
+                    pixel_values = pixel_values.to(torch.bfloat16).cuda()
+                    video_cache[video_path] = (pixel_values, num_patches_list)
+                except Exception as e:
+                    print(f"Error loading video {video_path}: {e}")
+                    results.append({'id': question_id, 'answer': 'A'})
+                    continue
+            else:
+                pixel_values, num_patches_list = video_cache[video_path]
+
+            # Create video prefix with frame markers
+            video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
+
+            # Create full prompt
+            prompt = create_prompt(question_text, choices)
+            full_question = video_prefix + prompt
+
             try:
-                pixel_values, num_patches_list = load_video(
-                    full_video_path,
-                    num_segments=num_frames,
-                    max_num=1
+                # Run inference
+                response = model.chat(
+                    tokenizer,
+                    pixel_values,
+                    full_question,
+                    generation_config,
+                    num_patches_list=num_patches_list,
+                    history=None,
+                    return_history=False
                 )
-                pixel_values = pixel_values.to(torch.bfloat16).cuda()
-                video_cache[video_path] = (pixel_values, num_patches_list)
+
+                # Extract answer
+                answer = extract_answer(response, len(choices))
+
+                results.append({
+                    'id': question_id,
+                    'answer': answer
+                })
+
+                # Print sample results (first 3)
+                if batch_start < 3:
+                    print(f"\n{'='*80}")
+                    print(f"Question ID: {question_id}")
+                    print(f"Question: {question_text[:100]}...")
+                    print(f"Choices: {', '.join(choices)}")
+                    print(f"Model response: {response[:200]}...")
+                    print(f"Extracted answer: {answer}")
+                    print(f"{'='*80}\n")
+
             except Exception as e:
-                print(f"Error loading video {video_path}: {e}")
+                print(f"Error processing question {question_id}: {e}")
                 results.append({'id': question_id, 'answer': 'A'})
-                continue
+
         else:
-            pixel_values, num_patches_list = video_cache[video_path]
+            # Batch processing
+            batch_pixel_values = []
+            batch_num_patches_lists = []
+            batch_questions = []
+            batch_metadata = []
 
-        # Create video prefix with frame markers
-        video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
+            # Prepare batch data
+            for item in batch_items:
+                question_id = item['id']
+                question_text = item['question']
+                choices = item['choices']
+                video_path = item['video_path']
+                full_video_path = os.path.join(base_path, video_path)
 
-        # Create full prompt
-        prompt = create_prompt(question_text, choices)
-        full_question = video_prefix + prompt
+                # Load video
+                if video_path not in video_cache:
+                    try:
+                        pixel_values, num_patches_list = load_video(
+                            full_video_path,
+                            num_segments=num_frames,
+                            max_num=1
+                        )
+                        pixel_values = pixel_values.to(torch.bfloat16).cuda()
+                        video_cache[video_path] = (pixel_values, num_patches_list)
+                    except Exception as e:
+                        print(f"Error loading video {video_path}: {e}")
+                        batch_metadata.append({
+                            'id': question_id,
+                            'error': True,
+                            'num_choices': len(choices)
+                        })
+                        continue
+                else:
+                    pixel_values, num_patches_list = video_cache[video_path]
 
-        try:
-            # Run inference
-            response = model.chat(
-                tokenizer,
-                pixel_values,
-                full_question,
-                generation_config,
-                num_patches_list=num_patches_list,
-                history=None,
-                return_history=False
-            )
+                # Create video prefix with frame markers
+                video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
 
-            # Extract answer
-            answer = extract_answer(response, len(choices))
+                # Create full prompt
+                prompt = create_prompt(question_text, choices)
+                full_question = video_prefix + prompt
 
-            results.append({
-                'id': question_id,
-                'answer': answer
-            })
+                batch_pixel_values.append(pixel_values)
+                batch_num_patches_lists.append(num_patches_list)
+                batch_questions.append(full_question)
+                batch_metadata.append({
+                    'id': question_id,
+                    'error': False,
+                    'num_choices': len(choices),
+                    'question': question_text,
+                    'choices': choices
+                })
 
-            # Print sample results (first 5)
-            if idx < 5:
-                print(f"\n{'='*80}")
-                print(f"Question ID: {question_id}")
-                print(f"Question: {question_text[:100]}...")
-                print(f"Choices: {', '.join(choices)}")
-                print(f"Model response: {response[:200]}...")
-                print(f"Extracted answer: {answer}")
-                print(f"{'='*80}\n")
+            # Run batch inference if we have valid items
+            if batch_pixel_values:
+                try:
+                    # Concatenate all pixel values
+                    all_pixel_values = torch.cat(batch_pixel_values, dim=0)
 
-        except Exception as e:
-            print(f"Error processing question {question_id}: {e}")
-            results.append({'id': question_id, 'answer': 'A'})
+                    # Flatten num_patches_lists
+                    all_num_patches_list = [num for sublist in batch_num_patches_lists for num in sublist]
+
+                    # Use batch_chat for efficiency
+                    responses = model.batch_chat(
+                        tokenizer,
+                        all_pixel_values,
+                        num_patches_list=all_num_patches_list,
+                        questions=batch_questions,
+                        generation_config=generation_config
+                    )
+
+                    # Process responses
+                    for idx, (response, metadata) in enumerate(zip(responses, batch_metadata)):
+                        if metadata.get('error', False):
+                            results.append({'id': metadata['id'], 'answer': 'A'})
+                            continue
+
+                        answer = extract_answer(response, metadata['num_choices'])
+                        results.append({
+                            'id': metadata['id'],
+                            'answer': answer
+                        })
+
+                        # Print sample results (first 3)
+                        if batch_start + idx < 3:
+                            print(f"\n{'='*80}")
+                            print(f"Question ID: {metadata['id']}")
+                            print(f"Question: {metadata['question'][:100]}...")
+                            print(f"Choices: {', '.join(metadata['choices'])}")
+                            print(f"Model response: {response[:200]}...")
+                            print(f"Extracted answer: {answer}")
+                            print(f"{'='*80}\n")
+
+                except Exception as e:
+                    print(f"Error in batch processing: {e}")
+                    # Fallback: add default answers for failed batch
+                    for metadata in batch_metadata:
+                        if not metadata.get('error', False):
+                            results.append({'id': metadata['id'], 'answer': 'A'})
+
+            # Handle items that failed to load
+            for metadata in batch_metadata:
+                if metadata.get('error', False):
+                    results.append({'id': metadata['id'], 'answer': 'A'})
 
     return results
 
@@ -408,6 +524,12 @@ def main():
         default=False,
         help='Enable thinking mode (R1-style reasoning with <think> tags, uses do_sample=True and temperature=0.6)'
     )
+    parser.add_argument(
+        '--batch_size',
+        type=int,
+        default=1,
+        help='Batch size for inference (default: 1). Higher values use more GPU memory but process faster.'
+    )
 
     args = parser.parse_args()
 
@@ -421,6 +543,7 @@ def main():
     print(f"{'='*80}")
     print(f"Model: {args.model}")
     print(f"Frames per video: {args.num_frames}")
+    print(f"Batch size: {args.batch_size}")
     print(f"Samples: {args.samples if args.samples else 'All'}")
     print(f"8-bit quantization: {'Enabled' if args.load_in_8bit else 'Disabled'}")
     print(f"Thinking mode: {'Enabled' if args.thinking else 'Disabled'}")
@@ -435,7 +558,7 @@ def main():
     model, tokenizer = load_model(args.model, args.load_in_8bit, args.thinking)
 
     # Run inference
-    results = run_inference(model, tokenizer, questions, base_path, args.num_frames, args.thinking)
+    results = run_inference(model, tokenizer, questions, base_path, args.num_frames, args.thinking, args.batch_size)
 
     # Save results
     output_path = save_results(results, output_dir, args.model)
