@@ -453,12 +453,11 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
                         generation_config=generation_config
                     )
 
-                    # Process responses
-                    for idx, (response, metadata) in enumerate(zip(responses, batch_metadata)):
-                        if metadata.get('error', False):
-                            results.append({'id': metadata['id'], 'answer': 'A', 'raw_response': 'Error loading video'})
-                            continue
+                    # Filter out items with errors before processing
+                    valid_metadata = [m for m in batch_metadata if not m.get('error', False)]
 
+                    # Process responses
+                    for idx, (response, metadata) in enumerate(zip(responses, valid_metadata)):
                         answer = extract_answer(response, metadata['num_choices'])
                         results.append({
                             'id': metadata['id'],
@@ -478,12 +477,14 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
 
                 except Exception as e:
                     print(f"Error in batch processing: {e}")
-                    # Fallback: add default answers for failed batch
+                    # Fallback: add default answers for items that were supposed to be in this batch
+                    # but haven't been added to results yet
+                    processed_ids = {r['id'] for r in results}
                     for metadata in batch_metadata:
-                        if not metadata.get('error', False):
+                        if not metadata.get('error', False) and metadata['id'] not in processed_ids:
                             results.append({'id': metadata['id'], 'answer': 'A', 'raw_response': f'Batch error: {str(e)}'})
 
-            # Handle items that failed to load
+            # Handle items that failed to load (process once, after batch processing)
             for metadata in batch_metadata:
                 if metadata.get('error', False):
                     results.append({'id': metadata['id'], 'answer': 'A', 'raw_response': 'Error loading video'})
