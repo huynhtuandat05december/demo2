@@ -5,8 +5,12 @@ import time
 import cv2
 import tqdm
 import sys
+import os
 
-sys.path.insert(0, '/grit_base/third_party/CenterNet2/projects/CenterNet2/')
+# Get the absolute path to the CenterNet2 directory relative to this file
+current_dir = os.path.dirname(os.path.abspath(__file__))
+centernet2_path = os.path.join(current_dir, 'third_party', 'CenterNet2', 'projects', 'CenterNet2')
+sys.path.insert(0, centernet2_path)
 
 from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
