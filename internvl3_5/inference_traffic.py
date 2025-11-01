@@ -533,7 +533,7 @@ def main():
         '--model',
         type=str,
         default='OpenGVLab/InternVL3_5-4B-Instruct',
-        choices=['OpenGVLab/InternVL3_5-4B-Instruct', 'OpenGVLab/InternVL3_5-4B'],
+        choices=['OpenGVLab/InternVL3_5-4B-Instruct', 'OpenGVLab/InternVL3_5-4B', 'OpenGVLab/InternVL3_5-8B'],
         help='Model to use for inference'
     )
     parser.add_argument(
