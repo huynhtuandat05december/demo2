@@ -67,9 +67,3 @@ def image_caption_api(image_src, device):
         predictions, visualized_output = demo.run_on_image(img)
         new_caption = dense_pred_to_caption(predictions)
     return new_caption
-
-if __name__ == "__main__":
-    image_src = "https://thumbs.dreamstime.com/b/park-playground-background-vector-illustration-71142090.jpg"
-    device = "cuda"
-    caption = image_caption_api(image_src, device)
-    print(caption)
