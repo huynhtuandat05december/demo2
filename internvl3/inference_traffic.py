@@ -440,7 +440,8 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8,
             results.append({
                 'id': question_id,
                 'answer': answer,
-                'raw_response': response
+                'raw_response': response,
+                'prompt': prompt
             })
 
             # Print sample results (first 5)
@@ -455,7 +456,7 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8,
 
         except Exception as e:
             print(f"Error processing question {question_id}: {e}")
-            results.append({'id': question_id, 'answer': 'A', 'raw_response': f'Error: {str(e)}'})
+            results.append({'id': question_id, 'answer': 'A', 'raw_response': f'Error: {str(e)}', 'prompt': prompt if 'prompt' in locals() else ''})
 
     return results
 
@@ -476,13 +477,14 @@ def save_results(results, output_dir, model_name):
 
     # Write CSV with proper escaping
     with open(output_path, 'w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['id', 'answer', 'raw_response'])
+        writer = csv.DictWriter(f, fieldnames=['id', 'answer', 'raw_response', 'prompt'])
         writer.writeheader()
         for result in results:
             writer.writerow({
                 'id': result['id'],
                 'answer': result['answer'],
-                'raw_response': result.get('raw_response', '')
+                'raw_response': result.get('raw_response', ''),
+                'prompt': result.get('prompt', '')
             })
 
     print(f"\nResults saved to: {output_path}")
