@@ -17,9 +17,9 @@ from detectron2.data.detection_utils import read_image
 from detectron2.utils.logger import setup_logger
 
 from centernet.config import add_centernet_config
-from models.grit_base.grit.config import add_grit_config
+from grit_base.grit.config import add_grit_config
 
-from models.grit_base.grit.predictor import VisualizationDemo
+from grit_base.grit.predictor import VisualizationDemo
 import json
 from utils.helper import resize_long_edge_cv2
 
