@@ -14,6 +14,8 @@ from torchvision.transforms.functional import InterpolationMode
 from transformers import AutoModel, AutoTokenizer, AutoConfig
 from tqdm import tqdm
 
+from prompt import create_prompt
+
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
@@ -207,20 +209,20 @@ def load_test_data(json_path, samples=None):
 
     return questions
 
-def create_prompt(question, choices):
-    """Create prompt for Vietnamese traffic video Q&A"""
-    choices_text = '\n'.join(choices)
+# def create_prompt(question, choices):
+#     """Create prompt for Vietnamese traffic video Q&A"""
+#     choices_text = '\n'.join(choices)
 
-    prompt = f"""Bạn là một trợ lý AI chuyên về giao thông. Dựa trên video giao thông được cung cấp, hãy trả lời câu hỏi sau.
+#     prompt = f"""Bạn là một trợ lý AI chuyên về giao thông. Dựa trên video giao thông được cung cấp, hãy trả lời câu hỏi sau.
 
-Câu hỏi: {question}
+# Câu hỏi: {question}
 
-Các lựa chọn:
-{choices_text}
+# Các lựa chọn:
+# {choices_text}
 
-Hãy chọn đáp án đúng nhất (chỉ trả lời A, B, C hoặc D):"""
+# Hãy chọn đáp án đúng nhất (chỉ trả lời A, B, C hoặc D):"""
 
-    return prompt
+#     return prompt
 
 def extract_answer(response, num_choices=4):
     """Extract answer letter from model response (handles thinking mode with <think> tags)"""
@@ -320,15 +322,14 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
             video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
 
             # Create full prompt
-            prompt = create_prompt(question_text, choices)
-            full_question = video_prefix + prompt
+            prompt = create_prompt(question_text, choices, video_prefix)
 
             try:
                 # Run inference
                 response = model.chat(
                     tokenizer,
                     pixel_values,
-                    full_question,
+                    prompt,
                     generation_config,
                     num_patches_list=num_patches_list,
                     history=None,
@@ -397,12 +398,11 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
                 video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
 
                 # Create full prompt
-                prompt = create_prompt(question_text, choices)
-                full_question = video_prefix + prompt
+                prompt = create_prompt(question_text, choices, video_prefix)
 
                 batch_pixel_values.append(pixel_values)
                 batch_num_patches_lists.append(num_patches_list)
-                batch_questions.append(full_question)
+                batch_questions.append(prompt)
                 batch_metadata.append({
                     'id': question_id,
                     'error': False,
