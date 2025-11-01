@@ -35,4 +35,7 @@ dependencies = [
     "inflect",
     "protobuf==3.19.4",
     "detectron2 @ git+https://github.com/facebookresearch/detectron2.git@cc87e7ec",
+    "torch==1.9.0+cu111",
+    "torchvision==0.10.0+cu111",
+    "torchaudio==0.9.0",
 ]
