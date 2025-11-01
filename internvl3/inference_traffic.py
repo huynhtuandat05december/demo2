@@ -12,11 +12,87 @@ import torchvision.transforms as T
 from decord import VideoReader, cpu
 from PIL import Image
 from torchvision.transforms.functional import InterpolationMode
-from transformers import AutoModel, AutoTokenizer, AutoConfig
+from transformers import AutoModel, AutoTokenizer, AutoConfig, AutoProcessor, AutoModelForZeroShotObjectDetection
 from tqdm import tqdm
 
 
-def create_prompt(question, choices, video_prefix):
+def load_grounding_dino(model_id="IDEA-Research/grounding-dino-tiny", device=None):
+    """Load Grounding DINO model for object detection"""
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    print(f"Loading Grounding DINO model: {model_id}")
+    processor = AutoProcessor.from_pretrained(model_id)
+    model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
+    model.eval()
+    print("Grounding DINO loaded successfully!")
+
+    return processor, model
+
+
+def preprocess_frame_with_grounding_dino(frame, processor, model, threshold=0.3, text_threshold=0.25):
+    """
+    Detect objects in frame using Grounding DINO and return cropped regions
+
+    Args:
+        frame: PIL Image
+        processor: Grounding DINO processor
+        model: Grounding DINO model
+        threshold: Detection confidence threshold
+        text_threshold: Text matching threshold
+
+    Returns:
+        list of (PIL.Image, label, score): Cropped regions with their labels and scores
+    """
+    # Define traffic-related object categories
+    text_labels = [[
+        "traffic sign", "traffic light", "traffic signal",
+        "lane arrow", "road marking", "lane marking",
+        "vehicle", "car", "truck", "motorcycle", "bicycle",
+        "pedestrian", "stop sign", "speed limit sign"
+    ]]
+
+    # Run detection
+    inputs = processor(images=frame, text=text_labels, return_tensors="pt").to(model.device)
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    # Post-process results
+    results = processor.post_process_grounded_object_detection(
+        outputs,
+        inputs.input_ids,
+        threshold=threshold,
+        text_threshold=text_threshold,
+        target_sizes=[frame.size[::-1]]  # (height, width)
+    )
+
+    result = results[0]
+    cropped_regions = []
+
+    # Extract and crop detected regions
+    for box, score, label in zip(result["boxes"], result["scores"], result["labels"]):
+        box = box.tolist()
+        # Convert box coordinates to integers: [x_min, y_min, x_max, y_max]
+        x_min, y_min, x_max, y_max = map(int, box)
+
+        # Crop the region from the frame
+        cropped = frame.crop((x_min, y_min, x_max, y_max))
+        cropped_regions.append((cropped, label, score.item()))
+
+    return cropped_regions
+
+
+def create_prompt(question, choices, video_prefix, detections_info=None):
+    """Create prompt with optional detection information"""
+    detection_context = ""
+    if detections_info and any(info['num_detections'] > 0 for info in detections_info):
+        detection_context = "\n    Các đối tượng được phát hiện trong video:"
+        for i, info in enumerate(detections_info):
+            if info['num_detections'] > 0:
+                labels_str = ", ".join(info['labels'])
+                detection_context += f"\n    - Frame {i+1}: {info['num_detections']} đối tượng ({labels_str})"
+
     SYSTEM_PROMPT = f"""
     Bạn là một AI chuyên gia phân tích an toàn giao thông. Nhiệm vụ duy nhất của bạn là phân tích video clip từ camera hành trình được cung cấp và trả lời một câu hỏi cụ thể về video đó.
 
@@ -29,6 +105,7 @@ def create_prompt(question, choices, video_prefix):
     Nhận thức về thời gian: Xem xét chuỗi sự kiện. Nếu câu hỏi về một hành động, hãy mô tả những gì xảy ra trong suốt clip.
 
     Tuân thủ định dạng: Đối với các câu hỏi trắc nghiệm, chỉ trả lời bằng chữ cái (ví dụ: A, B, C, D) của lựa chọn đúng. Không giải thích.
+    {detection_context}
 
     {video_prefix}
 
@@ -120,26 +197,60 @@ def get_index(bound, fps, max_frame, first_idx=0, num_segments=8):
     ])
     return frame_indices
 
-def load_video(video_path, bound=None, input_size=448, max_num=1, num_segments=8):
-    """Load video and extract frames uniformly"""
+def load_video(video_path, bound=None, input_size=448, max_num=1, num_segments=8,
+               grounding_dino_processor=None, grounding_dino_model=None,
+               detection_threshold=0.3, max_detections_per_frame=5):
+    """Load video and extract frames uniformly with optional Grounding DINO preprocessing"""
     vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
     max_frame = len(vr) - 1
     fps = float(vr.get_avg_fps())
 
     pixel_values_list, num_patches_list = [], []
+    detections_info = []  # Track detection info for each frame
     transform = build_transform(input_size=input_size)
     frame_indices = get_index(bound, fps, max_frame, first_idx=0, num_segments=num_segments)
 
+    use_grounding_dino = grounding_dino_processor is not None and grounding_dino_model is not None
+
     for frame_index in frame_indices:
         img = Image.fromarray(vr[frame_index].asnumpy()).convert('RGB')
-        img = dynamic_preprocess(img, image_size=input_size, use_thumbnail=True, max_num=max_num)
-        pixel_values = [transform(tile) for tile in img]
+
+        frame_detection_info = {'num_detections': 0, 'labels': []}
+
+        if use_grounding_dino:
+            # Detect objects in the frame
+            cropped_regions = preprocess_frame_with_grounding_dino(
+                img, grounding_dino_processor, grounding_dino_model,
+                threshold=detection_threshold
+            )
+
+            # Limit number of detections to avoid too many patches
+            cropped_regions = cropped_regions[:max_detections_per_frame]
+            frame_detection_info['num_detections'] = len(cropped_regions)
+            frame_detection_info['labels'] = [label for _, label, _ in cropped_regions]
+
+            # Process original frame
+            img_patches = dynamic_preprocess(img, image_size=input_size, use_thumbnail=True, max_num=max_num)
+
+            # Process cropped regions and add them
+            for cropped_img, label, score in cropped_regions:
+                # Process each detected region
+                cropped_patches = dynamic_preprocess(cropped_img, image_size=input_size,
+                                                     use_thumbnail=False, max_num=1)
+                img_patches.extend(cropped_patches)
+        else:
+            # Original behavior without Grounding DINO
+            img_patches = dynamic_preprocess(img, image_size=input_size, use_thumbnail=True, max_num=max_num)
+
+        # Transform all patches
+        pixel_values = [transform(tile) for tile in img_patches]
         pixel_values = torch.stack(pixel_values)
         num_patches_list.append(pixel_values.shape[0])
         pixel_values_list.append(pixel_values)
+        detections_info.append(frame_detection_info)
 
     pixel_values = torch.cat(pixel_values_list)
-    return pixel_values, num_patches_list
+    return pixel_values, num_patches_list, detections_info
 
 def split_model(model_path):
     """Split model across multiple GPUs"""
@@ -266,7 +377,9 @@ def extract_answer(response, num_choices=4):
     print(f"Warning: Could not extract answer from: {response[:100]}... Using 'A' as fallback.")
     return 'A'
 
-def run_inference(model, tokenizer, questions, base_path, num_frames=8):
+def run_inference(model, tokenizer, questions, base_path, num_frames=8,
+                  grounding_dino_processor=None, grounding_dino_model=None,
+                  detection_threshold=0.3, max_detections_per_frame=5):
     """Run inference on all questions"""
     results = []
     video_cache = {}  # Cache video frames
@@ -285,25 +398,29 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8):
         # Check if video has been processed before (caching)
         if video_path not in video_cache:
             try:
-                pixel_values, num_patches_list = load_video(
+                pixel_values, num_patches_list, detections_info = load_video(
                     full_video_path,
                     num_segments=num_frames,
-                    max_num=1
+                    max_num=1,
+                    grounding_dino_processor=grounding_dino_processor,
+                    grounding_dino_model=grounding_dino_model,
+                    detection_threshold=detection_threshold,
+                    max_detections_per_frame=max_detections_per_frame
                 )
                 pixel_values = pixel_values.to(torch.bfloat16).cuda()
-                video_cache[video_path] = (pixel_values, num_patches_list)
+                video_cache[video_path] = (pixel_values, num_patches_list, detections_info)
             except Exception as e:
                 print(f"Error loading video {video_path}: {e}")
                 results.append({'id': question_id, 'answer': 'A', 'raw_response': f'Error: {str(e)}'})
                 continue
         else:
-            pixel_values, num_patches_list = video_cache[video_path]
+            pixel_values, num_patches_list, detections_info = video_cache[video_path]
 
         # Create video prefix with frame markers
         video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
 
-        # Create full prompt
-        prompt = create_prompt(question_text, choices, video_prefix)
+        # Create full prompt with detection info
+        prompt = create_prompt(question_text, choices, video_prefix, detections_info)
 
         try:
             # Run inference
@@ -400,6 +517,30 @@ def main():
         default=False,
         help='Enable 8-bit quantization for lower memory usage (default: False)'
     )
+    parser.add_argument(
+        '--use_grounding_dino',
+        action='store_true',
+        default=False,
+        help='Enable Grounding DINO preprocessing to detect and crop traffic objects (default: False)'
+    )
+    parser.add_argument(
+        '--grounding_dino_model',
+        type=str,
+        default='IDEA-Research/grounding-dino-tiny',
+        help='Grounding DINO model to use (default: IDEA-Research/grounding-dino-tiny)'
+    )
+    parser.add_argument(
+        '--detection_threshold',
+        type=float,
+        default=0.3,
+        help='Detection confidence threshold for Grounding DINO (default: 0.3)'
+    )
+    parser.add_argument(
+        '--max_detections_per_frame',
+        type=int,
+        default=5,
+        help='Maximum number of detected objects to crop per frame (default: 5)'
+    )
 
     args = parser.parse_args()
 
@@ -415,6 +556,11 @@ def main():
     print(f"Frames per video: {args.num_frames}")
     print(f"Samples: {args.samples if args.samples else 'All'}")
     print(f"8-bit quantization: {'Enabled' if args.load_in_8bit else 'Disabled'}")
+    print(f"Grounding DINO: {'Enabled' if args.use_grounding_dino else 'Disabled'}")
+    if args.use_grounding_dino:
+        print(f"  - Model: {args.grounding_dino_model}")
+        print(f"  - Detection threshold: {args.detection_threshold}")
+        print(f"  - Max detections/frame: {args.max_detections_per_frame}")
     print(f"{'='*80}\n")
 
     # Load test data
@@ -423,8 +569,21 @@ def main():
     # Load model
     model, tokenizer = load_model(args.model, args.load_in_8bit)
 
+    # Load Grounding DINO if enabled
+    grounding_dino_processor, grounding_dino_model = None, None
+    if args.use_grounding_dino:
+        grounding_dino_processor, grounding_dino_model = load_grounding_dino(
+            model_id=args.grounding_dino_model
+        )
+
     # Run inference
-    results = run_inference(model, tokenizer, questions, base_path, args.num_frames)
+    results = run_inference(
+        model, tokenizer, questions, base_path, args.num_frames,
+        grounding_dino_processor=grounding_dino_processor,
+        grounding_dino_model=grounding_dino_model,
+        detection_threshold=args.detection_threshold,
+        max_detections_per_frame=args.max_detections_per_frame
+    )
 
     # Save results
     output_path = save_results(results, output_dir, args.model)
