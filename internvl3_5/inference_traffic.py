@@ -388,6 +388,7 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
             batch_num_patches_lists = []
             batch_questions = []
             batch_metadata = []
+            error_items = []  # Track items that failed to load separately
 
             # Prepare batch data
             for item in batch_items:
@@ -409,10 +410,10 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
                         video_cache[video_path] = (pixel_values, num_patches_list)
                     except Exception as e:
                         print(f"Error loading video {video_path}: {e}")
-                        batch_metadata.append({
+                        error_items.append({
                             'id': question_id,
-                            'error': True,
-                            'num_choices': len(choices)
+                            'answer': 'A',
+                            'raw_response': f'Error: {str(e)}'
                         })
                         continue
                 else:
@@ -429,11 +430,13 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
                 batch_questions.append(prompt)
                 batch_metadata.append({
                     'id': question_id,
-                    'error': False,
                     'num_choices': len(choices),
                     'question': question_text,
                     'choices': choices
                 })
+
+            # Add error items first
+            results.extend(error_items)
 
             # Run batch inference if we have valid items
             if batch_pixel_values:
@@ -453,11 +456,8 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
                         generation_config=generation_config
                     )
 
-                    # Filter out items with errors before processing
-                    valid_metadata = [m for m in batch_metadata if not m.get('error', False)]
-
-                    # Process responses
-                    for idx, (response, metadata) in enumerate(zip(responses, valid_metadata)):
+                    # Process responses - batch_metadata and responses should have same length now
+                    for idx, (response, metadata) in enumerate(zip(responses, batch_metadata)):
                         answer = extract_answer(response, metadata['num_choices'])
                         results.append({
                             'id': metadata['id'],
@@ -481,13 +481,8 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
                     # but haven't been added to results yet
                     processed_ids = {r['id'] for r in results}
                     for metadata in batch_metadata:
-                        if not metadata.get('error', False) and metadata['id'] not in processed_ids:
+                        if metadata['id'] not in processed_ids:
                             results.append({'id': metadata['id'], 'answer': 'A', 'raw_response': f'Batch error: {str(e)}'})
-
-            # Handle items that failed to load (process once, after batch processing)
-            for metadata in batch_metadata:
-                if metadata.get('error', False):
-                    results.append({'id': metadata['id'], 'answer': 'A', 'raw_response': 'Error loading video'})
 
     return results
 
