@@ -207,7 +207,7 @@ def get_index(bound, fps, max_frame, first_idx=0, num_segments=8):
     ])
     return frame_indices
 
-def load_video(video_path, bound=None, input_size=448, max_num=6, num_segments=8,
+def load_video(video_path, bound=None, input_size=448, max_num=3, num_segments=8,
                grounding_dino_processor=None, grounding_dino_model=None,
                detection_threshold=0.3, max_detections_per_frame=5):
     """Load video and extract frames uniformly with optional Grounding DINO preprocessing"""
@@ -239,8 +239,8 @@ def load_video(video_path, bound=None, input_size=448, max_num=6, num_segments=8
             frame_detection_info['num_detections'] = len(cropped_regions)
             frame_detection_info['labels'] = [label for _, label, _ in cropped_regions]
 
-            # Process original frame
-            img_patches = dynamic_preprocess(img, image_size=input_size, use_thumbnail=True, max_num=max_num)
+            # Process original frame (disable thumbnail to reduce patches)
+            img_patches = dynamic_preprocess(img, image_size=input_size, use_thumbnail=False, max_num=max_num)
 
             # Process cropped regions and add them
             for cropped_img, label, score in cropped_regions:
@@ -250,7 +250,7 @@ def load_video(video_path, bound=None, input_size=448, max_num=6, num_segments=8
                 img_patches.extend(cropped_patches)
         else:
             # Original behavior without Grounding DINO
-            img_patches = dynamic_preprocess(img, image_size=input_size, use_thumbnail=True, max_num=max_num)
+            img_patches = dynamic_preprocess(img, image_size=input_size, use_thumbnail=False, max_num=max_num)
 
         # Transform all patches
         pixel_values = [transform(tile) for tile in img_patches]
@@ -414,7 +414,7 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8,
                 pixel_values, num_patches_list, detections_info = load_video(
                     full_video_path,
                     num_segments=num_frames,
-                    max_num=6,  # Reduced from 12 to save VRAM during inference
+                    max_num=3,  # Reduced to 3 to save VRAM during inference
                     grounding_dino_processor=grounding_dino_processor,
                     grounding_dino_model=grounding_dino_model,
                     detection_threshold=detection_threshold,
