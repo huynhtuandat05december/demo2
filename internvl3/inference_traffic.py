@@ -389,7 +389,7 @@ def extract_answer(response, num_choices=4):
 
 def run_inference(model, tokenizer, questions, base_path, num_frames=8,
                   grounding_dino_processor=None, grounding_dino_model=None,
-                  detection_threshold=0.3, max_detections_per_frame=5):
+                  detection_threshold=0.3, max_detections_per_frame=5, max_num=3):
     """Run inference on all questions"""
     results = []
     video_cache = {}  # Cache video frames
@@ -414,7 +414,7 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8,
                 pixel_values, num_patches_list, detections_info = load_video(
                     full_video_path,
                     num_segments=num_frames,
-                    max_num=3,  # Reduced to 3 to save VRAM during inference
+                    max_num=max_num,
                     grounding_dino_processor=grounding_dino_processor,
                     grounding_dino_model=grounding_dino_model,
                     detection_threshold=detection_threshold,
@@ -580,6 +580,12 @@ def main():
         default=2,
         help='Maximum number of detected objects to crop per frame (default: 2)'
     )
+    parser.add_argument(
+        '--max_num',
+        type=int,
+        default=3,
+        help='Maximum number of patches per frame for dynamic preprocessing (default: 3, higher values = more detail but more VRAM)'
+    )
 
     args = parser.parse_args()
 
@@ -593,6 +599,7 @@ def main():
     print(f"{'='*80}")
     print(f"Model: {args.model}")
     print(f"Frames per video: {args.num_frames}")
+    print(f"Max patches per frame (max_num): {args.max_num}")
     print(f"Samples: {args.samples if args.samples else 'All'}")
     print(f"8-bit quantization: {'Enabled' if args.load_in_8bit else 'Disabled'}")
     print(f"Grounding DINO: {'Enabled' if args.use_grounding_dino else 'Disabled'}")
@@ -623,7 +630,8 @@ def main():
         grounding_dino_processor=grounding_dino_processor,
         grounding_dino_model=grounding_dino_model,
         detection_threshold=args.detection_threshold,
-        max_detections_per_frame=args.max_detections_per_frame
+        max_detections_per_frame=args.max_detections_per_frame,
+        max_num=args.max_num
     )
 
     # Save results
