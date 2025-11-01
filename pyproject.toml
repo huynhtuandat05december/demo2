@@ -34,4 +34,5 @@ dependencies = [
     "pyyaml",
     "inflect",
     "protobuf==3.19.4",
+    "numpy==1.24.4",
 ]
