@@ -207,7 +207,7 @@ def get_index(bound, fps, max_frame, first_idx=0, num_segments=8):
     ])
     return frame_indices
 
-def load_video(video_path, bound=None, input_size=448, max_num=1, num_segments=8,
+def load_video(video_path, bound=None, input_size=448, max_num=6, num_segments=8,
                grounding_dino_processor=None, grounding_dino_model=None,
                detection_threshold=0.3, max_detections_per_frame=5):
     """Load video and extract frames uniformly with optional Grounding DINO preprocessing"""
@@ -414,7 +414,7 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8,
                 pixel_values, num_patches_list, detections_info = load_video(
                     full_video_path,
                     num_segments=num_frames,
-                    max_num=1,
+                    max_num=6,  # Reduced from 12 to save VRAM during inference
                     grounding_dino_processor=grounding_dino_processor,
                     grounding_dino_model=grounding_dino_model,
                     detection_threshold=detection_threshold,
@@ -440,16 +440,17 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8,
             # Move pixel_values to GPU for inference (from CPU cache)
             pixel_values_gpu = pixel_values.cuda()
 
-            # Run inference
-            response = model.chat(
-                tokenizer,
-                pixel_values_gpu,
-                prompt,
-                generation_config,
-                num_patches_list=num_patches_list,
-                history=None,
-                return_history=False
-            )
+            # Run inference with torch.inference_mode() for memory efficiency
+            with torch.inference_mode():
+                response = model.chat(
+                    tokenizer,
+                    pixel_values_gpu,
+                    prompt,
+                    generation_config,
+                    num_patches_list=num_patches_list,
+                    history=None,
+                    return_history=False
+                )
 
             # Extract answer
             answer = extract_answer(response, len(choices))
@@ -464,6 +465,7 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8,
             # Free GPU memory immediately after inference
             del pixel_values_gpu
             torch.cuda.empty_cache()
+            gc.collect()  # Force garbage collection
 
             # Log VRAM periodically (every 10 questions)
             if (idx + 1) % 10 == 0:
@@ -487,6 +489,7 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8,
             if 'pixel_values_gpu' in locals():
                 del pixel_values_gpu
             torch.cuda.empty_cache()
+            gc.collect()
 
     # Log final VRAM usage
     log_vram_usage("End of inference")
@@ -574,8 +577,8 @@ def main():
     parser.add_argument(
         '--max_detections_per_frame',
         type=int,
-        default=5,
-        help='Maximum number of detected objects to crop per frame (default: 5)'
+        default=2,
+        help='Maximum number of detected objects to crop per frame (default: 2)'
     )
 
     args = parser.parse_args()
