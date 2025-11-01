@@ -242,32 +242,19 @@ def load_video(video_path, bound=None, input_size=448, max_num=3, num_segments=8
 
             # Limit number of detections to avoid too many patches
             cropped_regions = cropped_regions[:max_detections_per_frame]
-            num_detections = len(cropped_regions)
-            frame_detection_info['num_detections'] = num_detections
+            frame_detection_info['num_detections'] = len(cropped_regions)
             frame_detection_info['labels'] = [label for _, label, _, _ in cropped_regions]
             frame_detection_info['bboxes'] = [bbox for _, _, _, bbox in cropped_regions]
             frame_detection_info['scores'] = [score for _, _, score, _ in cropped_regions]
 
-            # ADAPTIVE PATCH STRATEGY: Reduce base patches when detections provide coverage
-            # Logic: More detections = fewer base patches needed (detections provide detail)
-            # - 0 detections: full max_num base patches (need all context)
-            # - 1-2 detections: reduced base patches (detections add focused views)
-            # - 3+ detections: skip base frame entirely (detections provide sufficient coverage)
-            if num_detections >= 3:
-                # Skip base frame processing - detection crops provide sufficient coverage
-                img_patches = []
-            else:
-                # Adaptive max_num: reduce base patches proportionally to detection count
-                # Formula: max_num - (2 × detections) ensures quality scales intelligently
-                adaptive_max_num = max(1, min(max_num, max_num - 2 * num_detections))
-                img_patches = dynamic_preprocess(img, image_size=input_size,
-                                                use_thumbnail=False, max_num=adaptive_max_num)
+            # Process original frame (disable thumbnail to reduce patches)
+            img_patches = dynamic_preprocess(img, image_size=input_size, use_thumbnail=False, max_num=max_num)
 
-            # Process cropped regions with higher quality (max_num=2 for better detail)
+            # Process cropped regions and add them
             for cropped_img, label, score, bbox in cropped_regions:
-                # Each detection crop processed with max_num=2 (higher quality than before)
+                # Process each detected region
                 cropped_patches = dynamic_preprocess(cropped_img, image_size=input_size,
-                                                     use_thumbnail=False, max_num=2)
+                                                     use_thumbnail=False, max_num=1)
                 img_patches.extend(cropped_patches)
         else:
             # Original behavior without Grounding DINO
