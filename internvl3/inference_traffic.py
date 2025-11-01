@@ -52,7 +52,8 @@ def preprocess_frame_with_grounding_dino(frame, processor, model, threshold=0.3,
         text_threshold: Text matching threshold
 
     Returns:
-        list of (PIL.Image, label, score): Cropped regions with their labels and scores
+        list of (PIL.Image, label, score, bbox): Cropped regions with their labels, scores, and bounding boxes
+        bbox format: (x_min, y_min, x_max, y_max)
     """
     # Define traffic-related object categories
     text_labels = [[
@@ -88,20 +89,23 @@ def preprocess_frame_with_grounding_dino(frame, processor, model, threshold=0.3,
 
         # Crop the region from the frame
         cropped = frame.crop((x_min, y_min, x_max, y_max))
-        cropped_regions.append((cropped, label, score.item()))
+        bbox = (x_min, y_min, x_max, y_max)
+        cropped_regions.append((cropped, label, score.item(), bbox))
 
     return cropped_regions
 
 
 def create_prompt(question, choices, video_prefix, detections_info=None):
-    """Create prompt with optional detection information"""
+    """Create prompt with optional detection information including bounding boxes"""
     detection_context = ""
     if detections_info and any(info['num_detections'] > 0 for info in detections_info):
         detection_context = "\n    Các đối tượng được phát hiện trong video:"
         for i, info in enumerate(detections_info):
             if info['num_detections'] > 0:
-                labels_str = ", ".join(info['labels'])
-                detection_context += f"\n    - Frame {i+1}: {info['num_detections']} đối tượng ({labels_str})"
+                detection_context += f"\n    - Frame {i+1}: {info['num_detections']} đối tượng:"
+                for j, (label, bbox, score) in enumerate(zip(info['labels'], info['bboxes'], info['scores'])):
+                    x_min, y_min, x_max, y_max = bbox
+                    detection_context += f"\n      • {label} (độ tin cậy: {score:.2f}) - vị trí [x:{x_min}-{x_max}, y:{y_min}-{y_max}]"
 
     SYSTEM_PROMPT = f"""
     Bạn là một AI chuyên gia phân tích an toàn giao thông. Nhiệm vụ duy nhất của bạn là phân tích video clip từ camera hành trình được cung cấp và trả lời một câu hỏi cụ thể về video đó.
@@ -111,6 +115,8 @@ def create_prompt(question, choices, video_prefix, detections_info=None):
     Chỉ dựa vào hình ảnh: Câu trả lời của bạn chỉ được dựa trên những gì xuất hiện trực quan trong các khung hình của video.
 
     Tập trung vào đối tượng: Chú ý kỹ đến đèn giao thông, biển báo (giới hạn tốc độ, dừng, cảnh báo), vạch kẻ đường, các phương tiện khác (ô tô, xe tải, xe máy), người đi bộ, và điều kiện thời tiết/đường sá.
+
+    Thông tin không gian: Sử dụng tọa độ vị trí (bounding box) của các đối tượng được phát hiện để hiểu vị trí tương đối và khoảng cách giữa các đối tượng trong khung hình.
 
     Nhận thức về thời gian: Xem xét chuỗi sự kiện. Nếu câu hỏi về một hành động, hãy mô tả những gì xảy ra trong suốt clip.
 
@@ -225,7 +231,7 @@ def load_video(video_path, bound=None, input_size=448, max_num=3, num_segments=8
     for frame_index in frame_indices:
         img = Image.fromarray(vr[frame_index].asnumpy()).convert('RGB')
 
-        frame_detection_info = {'num_detections': 0, 'labels': []}
+        frame_detection_info = {'num_detections': 0, 'labels': [], 'bboxes': [], 'scores': []}
 
         if use_grounding_dino:
             # Detect objects in the frame
@@ -237,13 +243,15 @@ def load_video(video_path, bound=None, input_size=448, max_num=3, num_segments=8
             # Limit number of detections to avoid too many patches
             cropped_regions = cropped_regions[:max_detections_per_frame]
             frame_detection_info['num_detections'] = len(cropped_regions)
-            frame_detection_info['labels'] = [label for _, label, _ in cropped_regions]
+            frame_detection_info['labels'] = [label for _, label, _, _ in cropped_regions]
+            frame_detection_info['bboxes'] = [bbox for _, _, _, bbox in cropped_regions]
+            frame_detection_info['scores'] = [score for _, _, score, _ in cropped_regions]
 
             # Process original frame (disable thumbnail to reduce patches)
             img_patches = dynamic_preprocess(img, image_size=input_size, use_thumbnail=False, max_num=max_num)
 
             # Process cropped regions and add them
-            for cropped_img, label, score in cropped_regions:
+            for cropped_img, label, score, bbox in cropped_regions:
                 # Process each detected region
                 cropped_patches = dynamic_preprocess(cropped_img, image_size=input_size,
                                                      use_thumbnail=False, max_num=1)
