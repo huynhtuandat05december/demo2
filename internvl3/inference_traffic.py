@@ -14,26 +14,26 @@ from PIL import Image
 from torchvision.transforms.functional import InterpolationMode
 from transformers import AutoModel, AutoTokenizer, AutoConfig, AutoProcessor, AutoModelForZeroShotObjectDetection
 from tqdm import tqdm
+import gc
 
 
-def load_grounding_dino(model_id="IDEA-Research/grounding-dino-tiny", device=None, use_bfloat16=True):
+def log_vram_usage(stage=""):
+    """Log current VRAM usage for monitoring"""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        reserved = torch.cuda.memory_reserved() / 1024**3
+        print(f"[VRAM {stage}] Allocated: {allocated:.2f}GB | Reserved: {reserved:.2f}GB")
+    return allocated if torch.cuda.is_available() else 0
+
+
+def load_grounding_dino(model_id="IDEA-Research/grounding-dino-tiny", device=None):
     """Load Grounding DINO model for object detection"""
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"Loading Grounding DINO model: {model_id}")
     processor = AutoProcessor.from_pretrained(model_id)
-
-    # Load with bfloat16 to save VRAM (float32: ~2.5GB -> bfloat16: ~1.3GB)
-    if use_bfloat16 and device.type == 'cuda':
-        model = AutoModelForZeroShotObjectDetection.from_pretrained(
-            model_id,
-            torch_dtype=torch.bfloat16
-        ).to(device)
-        print("Grounding DINO loaded with bfloat16 optimization")
-    else:
-        model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
-
+    model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
     model.eval()
     print("Grounding DINO loaded successfully!")
 
@@ -209,34 +209,8 @@ def get_index(bound, fps, max_frame, first_idx=0, num_segments=8):
 
 def load_video(video_path, bound=None, input_size=448, max_num=1, num_segments=8,
                grounding_dino_processor=None, grounding_dino_model=None,
-               detection_threshold=0.3, max_detections_per_frame=5,
-               cache_dir=None, use_cache=True):
-    """Load video and extract frames uniformly with optional Grounding DINO preprocessing
-
-    Args:
-        cache_dir: Directory to save/load preprocessed videos. If None, no caching.
-        use_cache: If True, load from cache if available and save to cache if processing.
-    """
-    # Check cache first if enabled
-    if use_cache and cache_dir is not None:
-        cache_path = Path(cache_dir)
-        cache_path.mkdir(parents=True, exist_ok=True)
-
-        # Create cache filename based on video path and detection parameters
-        video_stem = Path(video_path).stem
-        cache_filename = f"{video_stem}_t{detection_threshold}_m{max_detections_per_frame}_s{num_segments}.pt"
-        cache_file = cache_path / cache_filename
-
-        # Load from cache if exists
-        if cache_file.exists():
-            cached_data = torch.load(cache_file, map_location='cpu')
-            return (
-                cached_data['pixel_values'],
-                cached_data['num_patches_list'],
-                cached_data['detections_info']
-            )
-
-    # Process video (either no cache or cache miss)
+               detection_threshold=0.3, max_detections_per_frame=5):
+    """Load video and extract frames uniformly with optional Grounding DINO preprocessing"""
     vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
     max_frame = len(vr) - 1
     fps = float(vr.get_avg_fps())
@@ -286,17 +260,6 @@ def load_video(video_path, bound=None, input_size=448, max_num=1, num_segments=8
         detections_info.append(frame_detection_info)
 
     pixel_values = torch.cat(pixel_values_list)
-
-    # Save to cache if enabled
-    if use_cache and cache_dir is not None:
-        cache_data = {
-            'pixel_values': pixel_values.cpu(),  # Keep on CPU for storage
-            'num_patches_list': num_patches_list,
-            'detections_info': detections_info
-        }
-        torch.save(cache_data, cache_file)
-        print(f"Cached preprocessed video to: {cache_file}")
-
     return pixel_values, num_patches_list, detections_info
 
 def split_model(model_path):
@@ -424,136 +387,110 @@ def extract_answer(response, num_choices=4):
     print(f"Warning: Could not extract answer from: {response[:100]}... Using 'A' as fallback.")
     return 'A'
 
-def process_single_question(item, model, tokenizer, base_path, num_frames,
-                           grounding_dino_processor, grounding_dino_model,
-                           detection_threshold, max_detections_per_frame,
-                           cache_dir, video_cache):
-    """Process a single question and return result"""
-    question_id = item['id']
-    question_text = item['question']
-    choices = item['choices']
-    video_path = item['video_path']
-    full_video_path = os.path.join(base_path, video_path)
+def run_inference(model, tokenizer, questions, base_path, num_frames=8,
+                  grounding_dino_processor=None, grounding_dino_model=None,
+                  detection_threshold=0.3, max_detections_per_frame=5):
+    """Run inference on all questions"""
+    results = []
+    video_cache = {}  # Cache video frames
 
     generation_config = dict(max_new_tokens=512, do_sample=False, temperature=0.0)
 
-    # Load video (with or without GPU caching)
-    if video_cache is None or video_path not in video_cache:
-        try:
-            pixel_values, num_patches_list, detections_info = load_video(
-                full_video_path,
-                num_segments=num_frames,
-                max_num=1,
-                grounding_dino_processor=grounding_dino_processor,
-                grounding_dino_model=grounding_dino_model,
-                detection_threshold=detection_threshold,
-                max_detections_per_frame=max_detections_per_frame,
-                cache_dir=cache_dir
-            )
-            pixel_values = pixel_values.to(torch.bfloat16).cuda()
+    # Log VRAM at start of inference
+    log_vram_usage("Start of inference")
 
-            # Only cache if GPU caching is enabled
-            if video_cache is not None:
-                video_cache[video_path] = (pixel_values, num_patches_list, detections_info)
-        except Exception as e:
-            print(f"Error loading video {video_path}: {e}")
-            return {'id': question_id, 'answer': 'A', 'raw_response': f'Error: {str(e)}', 'prompt': ''}
-    else:
-        # Reuse from GPU cache
-        pixel_values, num_patches_list, detections_info = video_cache[video_path]
-
-    # Create video prefix with frame markers
-    video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
-
-    # Create full prompt with detection info
-    prompt = create_prompt(question_text, choices, video_prefix, detections_info)
-
-    try:
-        # Run inference
-        response = model.chat(
-            tokenizer,
-            pixel_values,
-            prompt,
-            generation_config,
-            num_patches_list=num_patches_list,
-            history=None,
-            return_history=False
-        )
-
-        # Extract answer
-        answer = extract_answer(response, len(choices))
-
-        return {
-            'id': question_id,
-            'answer': answer,
-            'raw_response': response,
-            'prompt': prompt
-        }
-
-    except Exception as e:
-        print(f"Error processing question {question_id}: {e}")
-        return {'id': question_id, 'answer': 'A', 'raw_response': f'Error: {str(e)}', 'prompt': prompt}
-
-
-def run_inference(model, tokenizer, questions, base_path, num_frames=8,
-                  grounding_dino_processor=None, grounding_dino_model=None,
-                  detection_threshold=0.3, max_detections_per_frame=5,
-                  cache_dir=None, disable_gpu_cache=False, clear_cache_per_video=False):
-    """Run inference on all questions
-
-    Args:
-        clear_cache_per_video: If True, clear GPU cache after each video is fully processed.
-                               Reduces VRAM but may reload videos if questions are interleaved.
-    """
-    results = []
-    video_cache = {} if not disable_gpu_cache else None  # Optional GPU cache
-
-    # Group questions by video if clear_cache_per_video is enabled
-    if clear_cache_per_video and not disable_gpu_cache:
-        from collections import defaultdict
-        questions_by_video = defaultdict(list)
-        for item in questions:
-            questions_by_video[item['video_path']].append(item)
-
-        # Process by video groups to minimize cache size
-        print(f"Processing {len(questions_by_video)} unique videos with cache clearing...")
-
-        for video_path, video_questions in tqdm(questions_by_video.items(), desc="Processing videos"):
-            # Process all questions for this video
-            for item in video_questions:
-                results.append(process_single_question(
-                    item, model, tokenizer, base_path, num_frames,
-                    grounding_dino_processor, grounding_dino_model,
-                    detection_threshold, max_detections_per_frame,
-                    cache_dir, video_cache
-                ))
-
-            # Clear this video from cache after all its questions are done
-            if video_path in video_cache:
-                del video_cache[video_path]
-                torch.cuda.empty_cache()
-
-        return results
-
-    # Original sequential processing (no cache clearing)
     for idx, item in enumerate(tqdm(questions, desc="Processing questions")):
-        result = process_single_question(
-            item, model, tokenizer, base_path, num_frames,
-            grounding_dino_processor, grounding_dino_model,
-            detection_threshold, max_detections_per_frame,
-            cache_dir, video_cache if not disable_gpu_cache else None
-        )
-        results.append(result)
+        question_id = item['id']
+        question_text = item['question']
+        choices = item['choices']
+        video_path = item['video_path']
 
-        # Print sample results (first 5)
-        if idx < 5:
-            print(f"\n{'='*80}")
-            print(f"Question ID: {result['id']}")
-            print(f"Question: {item['question'][:100]}...")
-            print(f"Choices: {', '.join(item['choices'])}")
-            print(f"Model response: {result['raw_response'][:200]}...")
-            print(f"Extracted answer: {result['answer']}")
-            print(f"{'='*80}\n")
+        # Construct full video path
+        full_video_path = os.path.join(base_path, video_path)
+
+        # Check if video has been processed before (caching)
+        if video_path not in video_cache:
+            try:
+                pixel_values, num_patches_list, detections_info = load_video(
+                    full_video_path,
+                    num_segments=num_frames,
+                    max_num=1,
+                    grounding_dino_processor=grounding_dino_processor,
+                    grounding_dino_model=grounding_dino_model,
+                    detection_threshold=detection_threshold,
+                    max_detections_per_frame=max_detections_per_frame
+                )
+                # Store on CPU to save VRAM - will move to GPU only during inference
+                pixel_values = pixel_values.to(torch.bfloat16).cpu()
+                video_cache[video_path] = (pixel_values, num_patches_list, detections_info)
+            except Exception as e:
+                print(f"Error loading video {video_path}: {e}")
+                results.append({'id': question_id, 'answer': 'A', 'raw_response': f'Error: {str(e)}'})
+                continue
+        else:
+            pixel_values, num_patches_list, detections_info = video_cache[video_path]
+
+        # Create video prefix with frame markers
+        video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
+
+        # Create full prompt with detection info
+        prompt = create_prompt(question_text, choices, video_prefix, detections_info)
+
+        try:
+            # Move pixel_values to GPU for inference (from CPU cache)
+            pixel_values_gpu = pixel_values.cuda()
+
+            # Run inference
+            response = model.chat(
+                tokenizer,
+                pixel_values_gpu,
+                prompt,
+                generation_config,
+                num_patches_list=num_patches_list,
+                history=None,
+                return_history=False
+            )
+
+            # Extract answer
+            answer = extract_answer(response, len(choices))
+
+            results.append({
+                'id': question_id,
+                'answer': answer,
+                'raw_response': response,
+                'prompt': prompt
+            })
+
+            # Free GPU memory immediately after inference
+            del pixel_values_gpu
+            torch.cuda.empty_cache()
+
+            # Log VRAM periodically (every 10 questions)
+            if (idx + 1) % 10 == 0:
+                log_vram_usage(f"After {idx + 1} questions")
+
+            # Print sample results (first 5)
+            if idx < 5:
+                print(f"\n{'='*80}")
+                print(f"Question ID: {question_id}")
+                print(f"Question: {question_text[:100]}...")
+                print(f"Choices: {', '.join(choices)}")
+                print(f"Model response: {response[:200]}...")
+                print(f"Extracted answer: {answer}")
+                print(f"{'='*80}\n")
+
+        except Exception as e:
+            print(f"Error processing question {question_id}: {e}")
+            results.append({'id': question_id, 'answer': 'A', 'raw_response': f'Error: {str(e)}', 'prompt': prompt if 'prompt' in locals() else ''})
+
+            # Clean up GPU memory even on error
+            if 'pixel_values_gpu' in locals():
+                del pixel_values_gpu
+            torch.cuda.empty_cache()
+
+    # Log final VRAM usage
+    log_vram_usage("End of inference")
+    print(f"\nTotal videos cached: {len(video_cache)}")
 
     return results
 
@@ -640,39 +577,8 @@ def main():
         default=5,
         help='Maximum number of detected objects to crop per frame (default: 5)'
     )
-    parser.add_argument(
-        '--stage',
-        type=str,
-        default='both',
-        choices=['preprocess', 'inference', 'both'],
-        help='Processing stage: preprocess (only Grounding DINO), inference (only InternVL3), or both (default: both)'
-    )
-    parser.add_argument(
-        '--cache_dir',
-        type=str,
-        default='./preprocessed_videos',
-        help='Directory to save/load preprocessed videos (default: ./preprocessed_videos)'
-    )
-    parser.add_argument(
-        '--disable_gpu_cache',
-        action='store_true',
-        default=False,
-        help='Disable GPU video caching to save VRAM (trades speed for memory, default: False)'
-    )
-    parser.add_argument(
-        '--low_vram',
-        action='store_true',
-        default=False,
-        help='Enable all VRAM optimizations: 8-bit quantization, bfloat16 GDINO, cache clearing, max 2 detections (default: False)'
-    )
 
     args = parser.parse_args()
-
-    # Apply low_vram preset
-    if args.low_vram:
-        args.load_in_8bit = True
-        args.max_detections_per_frame = 2
-        print("Low VRAM mode enabled: 8-bit quantization, 2 detections/frame, cache clearing")
 
     # Paths
     base_path = '../../RoadBuddy/traffic_buddy_train+public_test'
@@ -682,8 +588,6 @@ def main():
     print(f"\n{'='*80}")
     print("Traffic Video QA Inference")
     print(f"{'='*80}")
-    print(f"Stage: {args.stage}")
-    print(f"Cache directory: {args.cache_dir}")
     print(f"Model: {args.model}")
     print(f"Frames per video: {args.num_frames}")
     print(f"Samples: {args.samples if args.samples else 'All'}")
@@ -698,104 +602,33 @@ def main():
     # Load test data
     questions = load_test_data(json_path, args.samples)
 
-    # Stage 1: Preprocess only (Grounding DINO)
-    if args.stage == 'preprocess':
-        print("Stage 1: Preprocessing videos with Grounding DINO...")
+    # Load model
+    model, tokenizer = load_model(args.model, args.load_in_8bit)
+    log_vram_usage("After InternVL3 model loaded")
 
-        if not args.use_grounding_dino:
-            print("ERROR: --use_grounding_dino must be enabled for preprocessing stage")
-            return
-
-        # Load Grounding DINO only
+    # Load Grounding DINO if enabled
+    grounding_dino_processor, grounding_dino_model = None, None
+    if args.use_grounding_dino:
         grounding_dino_processor, grounding_dino_model = load_grounding_dino(
             model_id=args.grounding_dino_model
         )
+        log_vram_usage("After Grounding DINO model loaded")
 
-        # Process all unique videos and save to cache
-        unique_videos = set(item['video_path'] for item in questions)
-        print(f"Processing {len(unique_videos)} unique videos...")
+    # Run inference
+    results = run_inference(
+        model, tokenizer, questions, base_path, args.num_frames,
+        grounding_dino_processor=grounding_dino_processor,
+        grounding_dino_model=grounding_dino_model,
+        detection_threshold=args.detection_threshold,
+        max_detections_per_frame=args.max_detections_per_frame
+    )
 
-        for video_path in tqdm(unique_videos, desc="Preprocessing videos"):
-            full_video_path = os.path.join(base_path, video_path)
-            try:
-                # This will save to cache
-                load_video(
-                    full_video_path,
-                    num_segments=args.num_frames,
-                    max_num=1,
-                    grounding_dino_processor=grounding_dino_processor,
-                    grounding_dino_model=grounding_dino_model,
-                    detection_threshold=args.detection_threshold,
-                    max_detections_per_frame=args.max_detections_per_frame,
-                    cache_dir=args.cache_dir
-                )
-            except Exception as e:
-                print(f"Error preprocessing {video_path}: {e}")
+    # Save results
+    output_path = save_results(results, output_dir, args.model)
 
-        print("\n" + "="*80)
-        print("Preprocessing completed successfully!")
-        print(f"Cached videos saved to: {args.cache_dir}")
-        print("="*80)
-        return
-
-    # Stage 2: Inference only (InternVL3)
-    elif args.stage == 'inference':
-        print("Stage 2: Running inference with InternVL3 from cache...")
-
-        # Load InternVL3 only
-        model, tokenizer = load_model(args.model, args.load_in_8bit)
-
-        # Run inference (will load from cache)
-        results = run_inference(
-            model, tokenizer, questions, base_path, args.num_frames,
-            grounding_dino_processor=None,
-            grounding_dino_model=None,
-            detection_threshold=args.detection_threshold,
-            max_detections_per_frame=args.max_detections_per_frame,
-            cache_dir=args.cache_dir,
-            disable_gpu_cache=args.disable_gpu_cache,
-            clear_cache_per_video=args.low_vram
-        )
-
-        # Save results
-        output_path = save_results(results, output_dir, args.model)
-
-        print("\n" + "="*80)
-        print("Inference completed successfully!")
-        print("="*80)
-
-    # Stage 3: Both (original behavior)
-    else:  # args.stage == 'both'
-        print("Running both preprocessing and inference...")
-
-        # Load InternVL3
-        model, tokenizer = load_model(args.model, args.load_in_8bit)
-
-        # Load Grounding DINO if enabled
-        grounding_dino_processor, grounding_dino_model = None, None
-        if args.use_grounding_dino:
-            grounding_dino_processor, grounding_dino_model = load_grounding_dino(
-                model_id=args.grounding_dino_model
-            )
-
-        # Run inference
-        results = run_inference(
-            model, tokenizer, questions, base_path, args.num_frames,
-            grounding_dino_processor=grounding_dino_processor,
-            grounding_dino_model=grounding_dino_model,
-            detection_threshold=args.detection_threshold,
-            max_detections_per_frame=args.max_detections_per_frame,
-            cache_dir=args.cache_dir if args.use_grounding_dino else None,
-            disable_gpu_cache=args.disable_gpu_cache,
-            clear_cache_per_video=args.low_vram
-        )
-
-        # Save results
-        output_path = save_results(results, output_dir, args.model)
-
-        print("\n" + "="*80)
-        print("Inference completed successfully!")
-        print("="*80)
+    print("\n" + "="*80)
+    print("Inference completed successfully!")
+    print("="*80)
 
 if __name__ == '__main__':
     main()
