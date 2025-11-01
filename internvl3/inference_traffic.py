@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 import math
 import os
@@ -269,7 +270,7 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8):
                 video_cache[video_path] = (pixel_values, num_patches_list)
             except Exception as e:
                 print(f"Error loading video {video_path}: {e}")
-                results.append({'id': question_id, 'answer': 'A'})
+                results.append({'id': question_id, 'answer': 'A', 'raw_response': f'Error: {str(e)}'})
                 continue
         else:
             pixel_values, num_patches_list = video_cache[video_path]
@@ -297,7 +298,8 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8):
 
             results.append({
                 'id': question_id,
-                'answer': answer
+                'answer': answer,
+                'raw_response': response
             })
 
             # Print sample results (first 5)
@@ -312,7 +314,7 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8):
 
         except Exception as e:
             print(f"Error processing question {question_id}: {e}")
-            results.append({'id': question_id, 'answer': 'A'})
+            results.append({'id': question_id, 'answer': 'A', 'raw_response': f'Error: {str(e)}'})
 
     return results
 
@@ -331,11 +333,16 @@ def save_results(results, output_dir, model_name):
     filename = f"submission_{model_short}_{timestamp}.csv"
     output_path = os.path.join(output_dir, filename)
 
-    # Write CSV
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write("id,answer\n")
+    # Write CSV with proper escaping
+    with open(output_path, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=['id', 'answer', 'raw_response'])
+        writer.writeheader()
         for result in results:
-            f.write(f"{result['id']},{result['answer']}\n")
+            writer.writerow({
+                'id': result['id'],
+                'answer': result['answer'],
+                'raw_response': result.get('raw_response', '')
+            })
 
     print(f"\nResults saved to: {output_path}")
     print(f"Total predictions: {len(results)}")

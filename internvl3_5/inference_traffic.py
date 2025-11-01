@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 import math
 import os
@@ -313,7 +314,7 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
                     video_cache[video_path] = (pixel_values, num_patches_list)
                 except Exception as e:
                     print(f"Error loading video {video_path}: {e}")
-                    results.append({'id': question_id, 'answer': 'A'})
+                    results.append({'id': question_id, 'answer': 'A', 'raw_response': f'Error: {str(e)}'})
                     continue
             else:
                 pixel_values, num_patches_list = video_cache[video_path]
@@ -341,7 +342,8 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
 
                 results.append({
                     'id': question_id,
-                    'answer': answer
+                    'answer': answer,
+                    'raw_response': response
                 })
 
                 # Print sample results (first 3)
@@ -356,7 +358,7 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
 
             except Exception as e:
                 print(f"Error processing question {question_id}: {e}")
-                results.append({'id': question_id, 'answer': 'A'})
+                results.append({'id': question_id, 'answer': 'A', 'raw_response': f'Error: {str(e)}'})
 
         else:
             # Batch processing
@@ -432,13 +434,14 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
                     # Process responses
                     for idx, (response, metadata) in enumerate(zip(responses, batch_metadata)):
                         if metadata.get('error', False):
-                            results.append({'id': metadata['id'], 'answer': 'A'})
+                            results.append({'id': metadata['id'], 'answer': 'A', 'raw_response': 'Error loading video'})
                             continue
 
                         answer = extract_answer(response, metadata['num_choices'])
                         results.append({
                             'id': metadata['id'],
-                            'answer': answer
+                            'answer': answer,
+                            'raw_response': response
                         })
 
                         # Print sample results (first 3)
@@ -456,12 +459,12 @@ def run_inference(model, tokenizer, questions, base_path, num_frames=8, thinking
                     # Fallback: add default answers for failed batch
                     for metadata in batch_metadata:
                         if not metadata.get('error', False):
-                            results.append({'id': metadata['id'], 'answer': 'A'})
+                            results.append({'id': metadata['id'], 'answer': 'A', 'raw_response': f'Batch error: {str(e)}'})
 
             # Handle items that failed to load
             for metadata in batch_metadata:
                 if metadata.get('error', False):
-                    results.append({'id': metadata['id'], 'answer': 'A'})
+                    results.append({'id': metadata['id'], 'answer': 'A', 'raw_response': 'Error loading video'})
 
     return results
 
@@ -480,11 +483,16 @@ def save_results(results, output_dir, model_name):
     filename = f"submission_{model_short}_{timestamp}.csv"
     output_path = os.path.join(output_dir, filename)
 
-    # Write CSV
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write("id,answer\n")
+    # Write CSV with proper escaping
+    with open(output_path, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=['id', 'answer', 'raw_response'])
+        writer.writeheader()
         for result in results:
-            f.write(f"{result['id']},{result['answer']}\n")
+            writer.writerow({
+                'id': result['id'],
+                'answer': result['answer'],
+                'raw_response': result.get('raw_response', '')
+            })
 
     print(f"\nResults saved to: {output_path}")
     print(f"Total predictions: {len(results)}")
