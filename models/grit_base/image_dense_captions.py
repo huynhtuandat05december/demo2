@@ -5,21 +5,16 @@ import time
 import cv2
 import tqdm
 import sys
-import os
-
-# Get the absolute path to the CenterNet2 directory relative to this file
-current_dir = os.path.dirname(os.path.abspath(__file__))
-centernet2_path = os.path.join(current_dir, 'third_party', 'CenterNet2', 'projects', 'CenterNet2')
-sys.path.insert(0, centernet2_path)
 
 from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
 from detectron2.utils.logger import setup_logger
 
+sys.path.insert(0, 'models/grit_base/third_party/CenterNet2/projects/CenterNet2/')
 from centernet.config import add_centernet_config
-from grit_base.grit.config import add_grit_config
+from models.grit_base.grit.config import add_grit_config
 
-from grit_base.grit.predictor import VisualizationDemo
+from models.grit_base.grit.predictor import VisualizationDemo
 import json
 from utils.helper import resize_long_edge_cv2
 
@@ -57,7 +52,7 @@ def setup_cfg(args):
 
 
 def get_parser(device):
-    arg_dict = {'config_file': "grit_base/configs/GRiT_B_DenseCap_ObjectDet.yaml", 'cpu': False, 'confidence_threshold': 0.5, 'test_task': 'DenseCap', 'opts': ["MODEL.WEIGHTS", "grit_base/pretrained_models/grit_b_densecap_objectdet.pth"]}
+    arg_dict = {'config_file': "models/grit_base/configs/GRiT_B_DenseCap_ObjectDet.yaml", 'cpu': False, 'confidence_threshold': 0.5, 'test_task': 'DenseCap', 'opts': ["MODEL.WEIGHTS", "models/grit_base/pretrained_models/grit_b_densecap_objectdet.pth"]}
     if device == "cpu":
         arg_dict["cpu"] = True
     return arg_dict
@@ -72,7 +67,6 @@ def image_caption_api(image_src, device):
         predictions, visualized_output = demo.run_on_image(img)
         new_caption = dense_pred_to_caption(predictions)
     return new_caption
-
 
 if __name__ == "__main__":
     image_src = "https://thumbs.dreamstime.com/b/park-playground-background-vector-illustration-71142090.jpg"
