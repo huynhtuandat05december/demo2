@@ -34,11 +34,4 @@ dependencies = [
     "pyyaml",
     "inflect",
     "protobuf==3.19.4",
-    "torch",
-    "torchvision",
-    "torchaudio",
-    "detectron2 @ git+https://github.com/facebookresearch/detectron2.git",
 ]
-
-[tool.uv.extra-build-dependencies]
-detectron2 = ["torch"]
