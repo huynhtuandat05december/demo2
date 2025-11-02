@@ -240,7 +240,7 @@ def load_video_from_frames(frames, input_size=448, max_num=3):
 
     for img in frames:
         # Process frame with dynamic preprocessing
-        img_patches = dynamic_preprocess(img, image_size=input_size, use_thumbnail=False, max_num=max_num)
+        img_patches = dynamic_preprocess(img, image_size=input_size, use_thumbnail=True, max_num=max_num)
 
         # Transform all patches
         pixel_values = [transform(tile) for tile in img_patches]
@@ -564,7 +564,7 @@ def main():
     parser.add_argument(
         '--max_num',
         type=int,
-        default=3,
+        default=1,
         help='Maximum number of patches per frame for dynamic preprocessing (default: 3, higher values = more detail but more VRAM)'
     )
 
