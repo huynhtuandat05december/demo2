@@ -129,25 +129,25 @@ def get_key_frames_clip(video_path, question_text, clip_processor, clip_model, n
 def create_prompt(question, choices, video_prefix):
     """Create prompt for Vietnamese traffic video Q&A"""
     SYSTEM_PROMPT = f"""
-    B¡n là mÙt AI chuyên gia phân tích an toàn giao thông. NhiÇm vå duy nh¥t cça b¡n là phân tích video clip të camera hành trình °ãc cung c¥p và tr£ lİi mÙt câu hÏi cå thÃ vÁ video ó.
+    Báº¡n lÃ  má»™t AI chuyÃªn gia phÃ¢n tÃ­ch an toÃ n giao thÃ´ng. Nhiá»‡m vá»¥ duy nháº¥t cá»§a báº¡n lÃ  phÃ¢n tÃ­ch video clip tá»« camera hÃ nh trÃ¬nh Ä‘Æ°á»£c cung cáº¥p vÃ  tráº£ lá»i má»™t cÃ¢u há»i cá»¥ thá»ƒ vá» video Ä‘Ã³.
 
-    Nguyên t¯c phân tích:
+    NguyÃªn táº¯c phÃ¢n tÃ­ch:
 
-    ChÉ dña vào hình £nh: Câu tr£ lİi cça b¡n chÉ °ãc dña trên nhïng gì xu¥t hiÇn trñc quan trong các khung hình cça video.
+    Chá»‰ dá»±a vÃ o hÃ¬nh áº£nh: CÃ¢u tráº£ lá»i cá»§a báº¡n chá»‰ Ä‘Æ°á»£c dá»±a trÃªn nhá»¯ng gÃ¬ xuáº¥t hiá»‡n trá»±c quan trong cÃ¡c khung hÃ¬nh cá»§a video.
 
-    T­p trung vào Ñi t°ãng: Chú ı kù ¿n èn giao thông, biÃn báo (giÛi h¡n tÑc Ù, dëng, c£nh báo), v¡ch k» °İng, các ph°¡ng tiÇn khác (ô tô, xe t£i, xe máy), ng°İi i bÙ, và iÁu kiÇn thİi ti¿t/°İng sá.
+    Táº­p trung vÃ o Ä‘á»‘i tÆ°á»£ng: ChÃº Ã½ ká»¹ Ä‘áº¿n Ä‘Ã¨n giao thÃ´ng, biá»ƒn bÃ¡o (giá»›i háº¡n tá»‘c Ä‘á»™, dá»«ng, cáº£nh bÃ¡o), váº¡ch káº» Ä‘Æ°á»ng, cÃ¡c phÆ°Æ¡ng tiá»‡n khÃ¡c (Ã´ tÃ´, xe táº£i, xe mÃ¡y), ngÆ°á»i Ä‘i bá»™, vÃ  Ä‘iá»u kiá»‡n thá»i tiáº¿t/Ä‘Æ°á»ng sÃ¡.
 
-    Nh­n théc vÁ thİi gian: Xem xét chu×i sñ kiÇn. N¿u câu hÏi vÁ mÙt hành Ùng, hãy mô t£ nhïng gì x£y ra trong suÑt clip.
+    Nháº­n thá»©c vá» thá»i gian: Xem xÃ©t chuá»—i sá»± kiá»‡n. Náº¿u cÃ¢u há»i vá» má»™t hÃ nh Ä‘á»™ng, hÃ£y mÃ´ táº£ nhá»¯ng gÃ¬ xáº£y ra trong suá»‘t clip.
 
-    Tuân thç Ënh d¡ng: Ñi vÛi các câu hÏi tr¯c nghiÇm, chÉ tr£ lİi b±ng chï cái (ví då: A, B, C, D) cça lña chÍn úng. Không gi£i thích.
+    TuÃ¢n thá»§ Ä‘á»‹nh dáº¡ng: Äá»‘i vá»›i cÃ¡c cÃ¢u há»i tráº¯c nghiá»‡m, chá»‰ tráº£ lá»i báº±ng chá»¯ cÃ¡i (vÃ­ dá»¥: A, B, C, D) cá»§a lá»±a chá»n Ä‘Ãºng. KhÃ´ng giáº£i thÃ­ch.
 
     {video_prefix}
 
-    Câu hÏi: {question}
+    CÃ¢u há»i: {question}
 
-    Các lña chÍn: {choices}
+    CÃ¡c lá»±a chá»n: {choices}
 
-    ChÉ tr£ lİi b±ng chï cái (A, B, C, ho·c D) t°¡ng éng vÛi lña chÍn úng.
+    Chá»‰ tráº£ lá»i báº±ng chá»¯ cÃ¡i (A, B, C, hoáº·c D) tÆ°Æ¡ng á»©ng vá»›i lá»±a chá»n Ä‘Ãºng.
     """
     return SYSTEM_PROMPT
 
